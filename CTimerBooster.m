@@ -9,54 +9,82 @@
 #import "CTimerBooster.h"
 #import <objc/message.h>
 
-@interface NSTimerBoosterTarget : NSObject
+#define CTimerBoosterTicker @"CTimerBoosterTicker"
 
-@property (nonatomic, assign) NSUInteger time;
-@property (nonatomic, assign) NSUInteger tick;
+#pragma mark - CTimerBoosterItem class
+
+@interface CTimerBoosterItem : NSObject
+
+@property (nonatomic, assign) NSTimeInterval executeTime;
+@property (nonatomic, assign) NSTimeInterval timeInterval;
 @property (nonatomic, weak) id target;
 @property (nonatomic, assign) SEL selector;
+@property (nonatomic, strong) id parameters;
+@property (nonatomic, assign) BOOL repeat;
 
 - (id)init;
-- (void)run;
+- (BOOL)execute;
 
 @end
 
-@implementation NSTimerBoosterTarget
+@implementation CTimerBoosterItem
 
 - (id)init
 {
     self = [super init];
     if (self) {
-        self.time = 0;
-        self.tick = 0;
+        self.executeTime = 0;
         self.target = nil;
         self.selector = nil;
+        self.parameters = nil;
+        self.repeat = NO;
     }
+    
     return self;
 }
 
-- (void)run
+- (BOOL)execute
 {
     if (self.target && [self.target respondsToSelector:self.selector]) {
         IMP imp = [self.target methodForSelector:self.selector];
-        void (*excute)(id, SEL) = (void *)imp;
-        excute(self.target, self.selector);
+        void (*execute)(id, SEL, id) = (void *)imp;
+        execute(self.target, self.selector, self.parameters);
+        
+        return YES;
     }
+    
+    return NO;
+}
+
+- (void)dealloc
+{
+    self.target = nil;
+    self.selector = nil;
+    self.parameters = nil;
+    self.repeat = NO;
+    self.executeTime = 0;
+    self.timeInterval = 0;
 }
 
 @end
+
+#pragma mark - CTimerBooster class
 
 static CTimerBooster *sharedManager = nil;
 
 @interface CTimerBooster ()
 {
-    NSLock  *managerLock;
-    NSMutableArray *targets;
+    NSLock  *_managerLock;
 }
 
 @property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, strong) NSMutableArray *itemArray;
 
-- (void)add:(id)target sel:(SEL)selector time:(NSUInteger)time;
+- (void)addTarget:(id)target
+              sel:(SEL)selector
+            param:(id)parameters
+             time:(NSTimeInterval)time
+           repeat:(BOOL)repeat;
 - (void)remove:(id)target sel:(SEL)selector;
 - (void)kill;
 
@@ -69,9 +97,10 @@ static CTimerBooster *sharedManager = nil;
     @synchronized (self)
     {
         if (sharedManager == nil) {
-            sharedManager = [[self alloc] init];
+            return [[self alloc] init];
         }
     }
+    
     return sharedManager;
 }
 
@@ -79,10 +108,10 @@ static CTimerBooster *sharedManager = nil;
 {
     @synchronized (self) {
         if (sharedManager == nil) {
-            sharedManager = [super allocWithZone:zone];
-            return sharedManager;
+            return [super allocWithZone:zone];
         }
     }
+    
     return nil;
 }
 
@@ -90,8 +119,12 @@ static CTimerBooster *sharedManager = nil;
 {
     @synchronized(self) {
         self = [super init];
-        // Init
-        managerLock = [[NSLock alloc]init];
+        // Initialize
+        sharedManager = self;
+        _managerLock = [[NSLock alloc]init];
+        
+        // Add execute notification
+        [[NSNotificationCenter defaultCenter]addObserver:self selector:@selector(executeWith:) name:CTimerBoosterTicker object:nil];
         
         return self;
     }
@@ -112,84 +145,95 @@ static CTimerBooster *sharedManager = nil;
     
     _timer = [NSTimer scheduledTimerWithTimeInterval:0.001f
                                               target:self
-                                            selector:@selector(timerMaker)
+                                            selector:@selector(timeCounter)
                                             userInfo:nil
                                              repeats:YES];
     [[NSRunLoop currentRunLoop]addTimer:_timer forMode:NSRunLoopCommonModes];
+    
     return _timer;
+}
+
+- (NSMutableArray *)itemArray
+{
+    if (_itemArray) {
+        return _itemArray;
+    }
+    
+    _itemArray = [NSMutableArray array];
+    
+    return _itemArray;
 }
 
 #pragma mark - Self Methods
 
 - (void)lock
 {
-    [managerLock lock];
+    [_managerLock lock];
 }
 
 - (void)unlock
 {
-    [managerLock unlock];
+    [_managerLock unlock];
 }
 
-- (void)timerMaker
+- (NSTimeInterval)timeInterval
 {
-    [self lock];
-    
+    NSString *value = [NSString stringWithFormat:@"%.2lf", [[NSDate date]timeIntervalSince1970]];
+    return [value doubleValue];
+}
+
+- (void)timeCounter
+{
     static NSOperationQueue *queue = nil;
     if (queue == nil) {
         queue = [[NSOperationQueue alloc]init];
         queue.maxConcurrentOperationCount = 1000;
     }
     
-    if (targets && targets.count > 0) {
-        for (NSTimerBoosterTarget *target in targets) {
-            target.tick ++;
-            if (target.time == target.tick) {
-                target.tick = 0;
-                NSInvocationOperation *operation = [NSInvocationOperation alloc];
-                operation = [operation initWithTarget:self selector:@selector(runWithTarget:) object:target];
-                [queue addOperation:operation];
-                operation = nil;
+    if (self.itemArray && self.itemArray.count > 0) {
+        for (int i = 0; i < self.itemArray.count; i ++) {
+            CTimerBoosterItem *item = self.itemArray[i];
+            NSTimeInterval timeInterval = [self timeInterval];
+            if (item.executeTime <= timeInterval) {
+                // Make sure this will be executed
+                [[NSNotificationCenter defaultCenter]postNotificationName:CTimerBoosterTicker object:item];
             }
         }
     }
-    
-    [self unlock];
 }
 
-- (void)runWithTarget:(NSTimerBoosterTarget *)target
+- (void)executeWith:(NSNotification *)notification
 {
-    [target run];
+    CTimerBoosterItem *item = (CTimerBoosterItem *)notification.object;
+    if (![item execute] || !item.repeat) {
+        // Remove the item that no need to be executed
+        [self remove:item.target sel:item.selector];
+        item = nil;
+    } else {
+        item.executeTime += item.timeInterval;
+    }
 }
 
-- (void)add:(id)target sel:(SEL)selector time:(NSUInteger)time
+- (void)addTarget:(id)target
+              sel:(SEL)selector
+            param:(id)parameters
+             time:(NSTimeInterval)time
+           repeat:(BOOL)repeat
 {
     [self lock];
     
-    if (!targets) {
-        targets = [NSMutableArray array];
-    }
+    // 控制精度
+    NSString *value = [NSString stringWithFormat:@"%.2lf", time];
+    time = [value floatValue];
     
-    for (int i = 0; i < targets.count; i ++) {
-        // 移除Selector
-        NSTimerBoosterTarget *ftg = targets[i];
-        NSString *className = NSStringFromClass([target class]);
-        NSString *selName = NSStringFromSelector(ftg.selector);
-        NSString *_selName = NSStringFromSelector(selector);
-        NSString *_className = NSStringFromClass([ftg.target class]);
-        
-        if ([className isEqualToString:_className] && ftg.target == target && [_selName isEqualToString:selName]) {
-            NSLog(@"NSTimerBoosterTarget [%@, %@] ALREADY ADDED",className, selName);
-            [self unlock];
-            return;
-        }
-    }
-    
-    NSTimerBoosterTarget *ftarget = [[NSTimerBoosterTarget alloc]init];
-    ftarget.target = target;
-    ftarget.selector = selector;
-    ftarget.time = time;
-    [targets addObject:ftarget];
+    CTimerBoosterItem *item = [[CTimerBoosterItem alloc]init];
+    item.target = target;
+    item.selector = selector;
+    item.parameters = parameters;
+    item.timeInterval = time;
+    item.executeTime = [self timeInterval] + time;
+    item.repeat = repeat;
+    [self.itemArray addObject:item];
     
     [self unlock];
 }
@@ -199,20 +243,30 @@ static CTimerBooster *sharedManager = nil;
 {
     [self lock];
     
-    for (int i = 0; i < targets.count; i ++) {
-        // 移除Selector
-        NSTimerBoosterTarget *ftg = targets[i];
+    for (int i = 0; i < self.itemArray.count; i ++) {
+        // Remove the item
+        CTimerBoosterItem *item = self.itemArray[i];
         NSString *className = NSStringFromClass([target class]);
-        NSString *selName = NSStringFromSelector(ftg.selector);
-        NSString *_selName = NSStringFromSelector(selector);
-        NSString *_className = NSStringFromClass([ftg.target class]);
+        NSString *_className = NSStringFromClass([item.target class]);
         
-        if ([className isEqualToString:_className] && ftg.target == target && [_selName isEqualToString:selName]) {
-            ftg.target = nil;
-            ftg.selector = nil;
-            ftg.time = 0;
-            ftg.tick = 0;
-            [targets removeObject:ftg];
+        NSString *selName = NSStringFromSelector(selector);
+        NSString *_selName = NSStringFromSelector(item.selector);
+        
+        if ((item.target == target) &&
+            [className isEqualToString:_className] &&
+            (item.selector == selector) &&
+            [selName isEqualToString:_selName])
+        {
+            [self.itemArray removeObject:item];
+            
+            item.target = nil;
+            item.selector = nil;
+            item.parameters = nil;
+            item.repeat = NO;
+            item.executeTime = 0;
+            item.timeInterval = 0;
+            item = nil;
+            
             break;
         }
     }
@@ -228,22 +282,47 @@ static CTimerBooster *sharedManager = nil;
     [self.timer invalidate];
     self.timer = nil;
     
-    [targets removeAllObjects];
-    targets = nil;
+    [self.itemArray removeAllObjects];
+    self.itemArray = nil;
+    
+    [[NSNotificationCenter defaultCenter]removeObserver:self name:CTimerBoosterTicker object:nil];
+    [[NSNotificationCenter defaultCenter]removeObserver:self];
     
     [self unlock];
 }
 
-// 开始频率Timer计时,以0.001s发生一次
+// 开始频率Timer计时
 + (void)start
 {
     [[self sharedManager]timer];
 }
 
-// 添加一个接收目标
-+ (void)addTarget:(id)target sel:(SEL)selector time:(NSUInteger)time
+// 添加一个接收目标, 不重复执行
++ (void)addTarget:(id)target sel:(SEL)selector time:(NSTimeInterval)time
 {
-    [[self sharedManager]add:target sel:selector time:time];
+    [[self sharedManager]addTarget:target sel:selector param:nil time:time repeat:NO];
+}
+
+// 添加一个接收目标
++ (void)addTarget:(id)target sel:(SEL)selector time:(NSTimeInterval)time repeat:(BOOL)repeat
+{
+    [[self sharedManager]addTarget:target sel:selector param:nil time:time repeat:repeat];
+}
+
+// 添加一个带参接收目标, 不重复执行
++ (void)addTarget:(id)target sel:(SEL)selector param:(id)parameters time:(NSTimeInterval)time
+{
+    [[self sharedManager]addTarget:target sel:selector param:parameters time:time repeat:NO];
+}
+
+// 添加一个带参接收目标
++ (void)addTarget:(id)target
+              sel:(SEL)selector
+            param:(id)parameters
+             time:(NSTimeInterval)time
+           repeat:(BOOL)repeat
+{
+    [[self sharedManager]addTarget:target sel:selector param:parameters time:time repeat:repeat];
 }
 
 // 移除一个接收目标
