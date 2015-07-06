@@ -1,6 +1,6 @@
 //
 //  CTimerBooster.h
-//  NetworkSDK
+//  UniversalApp
 //
 //  Created by Cailiang on 14-9-20.
 //  Copyright (c) 2014年 Cailiang. All rights reserved.
@@ -31,6 +31,9 @@
 
 // 移除一个接收目标
 + (void)removeTarget:(id)target sel:(SEL)selector;
+
+// 移除所有指定目标
++ (void)removeAllWithTarget:(id)target sel:(SEL)selector;
 
 // 关闭发生器
 + (void)kill;
