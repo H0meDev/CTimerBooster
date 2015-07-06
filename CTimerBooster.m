@@ -224,7 +224,7 @@ static CTimerBooster *sharedManager = nil;
 
 - (void)addTarget:(id)target sel:(SEL)selector param:(id)parameters time:(NSTimeInterval)time repeat:(BOOL)repeat
 {
-    // Mo more than 20 tasks running at the same time.
+    // No more than 20 tasks running at the same time.
     [self lock];
     if (self.itemArray.count > 20) {
         [self unlock];
