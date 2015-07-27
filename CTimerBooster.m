@@ -242,8 +242,8 @@ static CTimerBooster *sharedManager = nil;
     item.timeInterval = time;
     item.executeTime = [self timeInterval] + time;
     item.repeat = repeat;
-    
     [self.itemArray addObject:item];
+    
     [self unlock];
 }
 
