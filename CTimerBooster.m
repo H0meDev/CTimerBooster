@@ -225,13 +225,11 @@ static CTimerBooster *sharedManager = nil;
 - (void)addTarget:(id)target sel:(SEL)selector param:(id)parameters time:(NSTimeInterval)time repeat:(BOOL)repeat
 {
     // No more than 20 tasks running at the same time.
-    [self lock];
     if (self.itemArray.count > 20) {
-        [self unlock];
-        
         return;
     }
-    [self unlock];
+    
+    [self lock];
     
     // 控制精度
     NSString *value = [NSString stringWithFormat:@"%.2lf", time];
@@ -245,7 +243,6 @@ static CTimerBooster *sharedManager = nil;
     item.executeTime = [self timeInterval] + time;
     item.repeat = repeat;
     
-    [self lock];
     [self.itemArray addObject:item];
     [self unlock];
 }
@@ -256,9 +253,6 @@ static CTimerBooster *sharedManager = nil;
     [self lock];
     
     NSMutableArray *itemArray = [NSMutableArray arrayWithArray:self.itemArray];
-    
-    [self unlock];
-    
     for (int i = 0; i < itemArray.count; i ++) {
         // Remove the item
         CTimerBoosterItem *item = itemArray[i];
@@ -280,8 +274,6 @@ static CTimerBooster *sharedManager = nil;
             }
         }
     }
-    
-    [self lock];
     
     self.itemArray = itemArray;
     
